@@ -117,6 +117,13 @@ export async function listApplications() {
   }[];
 }
 
+export async function deleteApplication(id: string) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from("applications").delete().eq("id", id).select("id").maybeSingle();
+  if (error) throw new AppError("The application could not be deleted.", 502, "application_delete_failed");
+  if (!data) throw new AppError("Application not found.", 404, "not_found");
+}
+
 export async function getApplication(id: string) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from("applications").select(columns).eq("id", id).maybeSingle();
