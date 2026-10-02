@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { CheckRepliesButton } from "@/components/check-replies-button";
 import { DeleteApplicationButton } from "@/components/delete-application-button";
 import { AppError } from "@/lib/errors";
 import { formatShortDate } from "@/lib/format";
@@ -31,14 +33,23 @@ export default async function ApplicationsPage() {
           <li key={application.id} className="flex items-stretch gap-2">
             <Link
               href={`/applications/${application.id}`}
-              className="grid min-w-0 flex-1 gap-0.5 rounded-xl bg-card px-3 py-3 ring-1 ring-foreground/10"
+              className="grid min-w-0 flex-1 gap-1 rounded-xl bg-card px-3 py-3 ring-1 ring-foreground/10"
             >
-              <span className="font-medium">{application.company}</span>
+              <span className="flex items-start justify-between gap-2">
+                <span className="font-medium">{application.company}</span>
+                {application.reply_from ? <Badge>Replied</Badge> : null}
+                {application.status === "sent" && !application.reply_from ? <Badge>Sent</Badge> : null}
+                {application.status === "failed" ? <Badge variant="destructive">Failed</Badge> : null}
+              </span>
               <span className="text-sm">{application.position}</span>
               <span className="text-sm text-muted-foreground">
-                {formatShortDate(application.created_at)} · {application.status}
+                {formatShortDate(application.created_at)}
+                {application.status === "draft" || application.status === "ready"
+                  ? ` · ${application.status}`
+                  : ""}
               </span>
             </Link>
+            {application.status === "sent" ? <CheckRepliesButton id={application.id} /> : null}
             <DeleteApplicationButton id={application.id} />
           </li>
         ))}

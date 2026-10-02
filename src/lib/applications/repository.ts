@@ -19,6 +19,10 @@ export type ApplicationRecord = {
   sentAt: string | null;
   errorMessage: string | null;
   sendStartedAt: string | null;
+  conversationId: string | null;
+  replyFrom: string | null;
+  replyPreview: string | null;
+  replyReceivedAt: string | null;
 };
 
 const draftSchema = z.object({
@@ -48,6 +52,10 @@ type ApplicationRow = {
   sent_at: string | null;
   error_message: string | null;
   send_started_at: string | null;
+  conversation_id: string | null;
+  reply_from: string | null;
+  reply_preview: string | null;
+  reply_received_at: string | null;
 };
 
 function fromRow(row: ApplicationRow): ApplicationRecord {
@@ -67,11 +75,16 @@ function fromRow(row: ApplicationRow): ApplicationRecord {
     sentAt: row.sent_at,
     errorMessage: row.error_message,
     sendStartedAt: row.send_started_at,
+    conversationId: row.conversation_id ?? null,
+    replyFrom: row.reply_from ?? null,
+    replyPreview: row.reply_preview ?? null,
+    replyReceivedAt: row.reply_received_at ?? null,
   };
 }
 
-const columns =
+const baseColumns =
   "id, created_at, company, position, job_source, job_description, job_analysis, recruiter_name, recruiter_email, email_subject, email_body, status, sent_at, error_message, send_started_at";
+const columns = `${baseColumns}, conversation_id, reply_from, reply_preview, reply_received_at`;
 
 export async function createDraft(input: {
   analysis: JobAnalysis;
@@ -93,7 +106,7 @@ export async function createDraft(input: {
       email_body: input.analysis.application.body,
       status: "draft",
     })
-    .select(columns)
+    .select(baseColumns)
     .single();
 
   if (error || !data) throw new AppError("The application could not be saved.", 502, "application_save_failed");
@@ -102,19 +115,29 @@ export async function createDraft(input: {
 
 export async function listApplications() {
   const supabase = getSupabase();
-  const { data, error } = await supabase
+  const listed = await supabase
     .from("applications")
-    .select("id, created_at, company, position, status")
+    .select("id, created_at, company, position, status, reply_from, reply_received_at")
     .order("created_at", { ascending: false })
     .limit(100);
-  if (error) throw new AppError("Applications could not be loaded.", 502, "applications_read_failed");
-  return (data ?? []) as {
-    id: string;
-    created_at: string;
-    company: string;
-    position: string;
-    status: ApplicationStatus;
-  }[];
+  const fallback = replyColumnMissing(listed.error)
+    ? await supabase
+        .from("applications")
+        .select("id, created_at, company, position, status")
+        .order("created_at", { ascending: false })
+        .limit(100)
+    : listed;
+  if (fallback.error) throw new AppError("Applications could not be loaded.", 502, "applications_read_failed");
+  return (fallback.data ?? []).map((row) => ({
+    id: row.id as string,
+    created_at: row.created_at as string,
+    company: row.company as string,
+    position: row.position as string,
+    status: row.status as ApplicationStatus,
+    reply_from: "reply_from" in row ? ((row.reply_from as string | null) ?? null) : null,
+    reply_received_at:
+      "reply_received_at" in row ? ((row.reply_received_at as string | null) ?? null) : null,
+  }));
 }
 
 export async function deleteApplication(id: string) {
@@ -126,11 +149,14 @@ export async function deleteApplication(id: string) {
 
 export async function getApplication(id: string) {
   const supabase = getSupabase();
-  const { data, error } = await supabase.from("applications").select(columns).eq("id", id).maybeSingle();
-  if (error) throw new AppError("The application could not be loaded.", 502, "application_read_failed");
-  if (!data) return null;
+  const first = await supabase.from("applications").select(columns).eq("id", id).maybeSingle();
+  const result = replyColumnMissing(first.error)
+    ? await supabase.from("applications").select(baseColumns).eq("id", id).maybeSingle()
+    : first;
+  if (result.error) throw new AppError("The application could not be loaded.", 502, "application_read_failed");
+  if (!result.data) return null;
   try {
-    return fromRow(data as ApplicationRow);
+    return fromRow(result.data as ApplicationRow);
   } catch {
     throw new AppError("The saved application is invalid.", 500, "application_invalid");
   }
@@ -241,6 +267,43 @@ export async function markSent(id: string) {
     })
     .eq("id", id);
   if (error) throw new AppError("history_update_failed", 502, "history_update_failed");
+}
+
+function replyColumnMissing(error: { message?: string; code?: string } | null) {
+  const message = error?.message ?? "";
+  return error?.code === "PGRST204" || /conversation_id|reply_from|reply_preview|reply_received_at/.test(message);
+}
+
+export async function saveConversationId(id: string, conversationId: string) {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("applications")
+    .update({ conversation_id: conversationId, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (replyColumnMissing(error)) {
+    throw new AppError("Run the replies migration in Supabase, then try again.", 503, "replies_not_ready");
+  }
+  if (error) throw new AppError("The reply check could not be saved.", 502, "reply_save_failed");
+}
+
+export async function saveReply(
+  id: string,
+  reply: { from: string; preview: string; receivedAt: string } | null,
+) {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("applications")
+    .update({
+      reply_from: reply?.from ?? null,
+      reply_preview: reply?.preview ?? null,
+      reply_received_at: reply?.receivedAt ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (replyColumnMissing(error)) {
+    throw new AppError("Run the replies migration in Supabase, then try again.", 503, "replies_not_ready");
+  }
+  if (error) throw new AppError("The reply check could not be saved.", 502, "reply_save_failed");
 }
 
 export async function markFailed(id: string, message: string) {

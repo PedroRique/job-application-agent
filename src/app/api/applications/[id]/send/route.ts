@@ -5,11 +5,12 @@ import {
   markFailed,
   markSent,
   parseSend,
+  saveConversationId,
 } from "@/lib/applications/repository";
 import { AppError } from "@/lib/errors";
 import { handleError } from "@/lib/http";
-import { sendMail } from "@/lib/microsoft/graph";
-import { graphAccessToken } from "@/lib/microsoft/msal";
+import { sendMail, findSentConversation } from "@/lib/microsoft/graph";
+import { graphAccessToken, graphReadAccessToken } from "@/lib/microsoft/msal";
 import { downloadResume, getLatestResume } from "@/lib/resume";
 import { requireSession } from "@/lib/session";
 
@@ -60,6 +61,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         warning:
           "The email was accepted by Outlook, but the history could not be updated. Check your Sent folder before sending again.",
       });
+    }
+
+    try {
+      const readToken = await graphReadAccessToken();
+      const conversationId = await findSentConversation(readToken, draft.emailSubject, draft.recruiterEmail);
+      if (conversationId) await saveConversationId(id, conversationId);
+    } catch {
+      console.error("sent_lookup_failed");
     }
 
     return NextResponse.json({ status: "sent" });

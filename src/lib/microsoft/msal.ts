@@ -1,6 +1,5 @@
 import {
   ConfidentialClientApplication,
-  InteractionRequiredAuthError,
   type ICachePlugin,
 } from "@azure/msal-node";
 import { AppError } from "@/lib/errors";
@@ -10,6 +9,11 @@ import { getSupabase } from "@/lib/supabase/admin";
 export const GRAPH_SCOPES = [
   "https://graph.microsoft.com/User.Read",
   "https://graph.microsoft.com/Mail.Send",
+];
+
+export const GRAPH_READ_SCOPES = [
+  ...GRAPH_SCOPES,
+  "https://graph.microsoft.com/Mail.Read",
 ];
 
 type ConnectionRow = {
@@ -55,7 +59,7 @@ export async function microsoftAuthUrl(state: string) {
   const { redirectUri } = requireMicrosoftConfig();
   const app = createApp({ value: "" });
   return app.getAuthCodeUrl({
-    scopes: GRAPH_SCOPES,
+    scopes: GRAPH_READ_SCOPES,
     redirectUri,
     state,
     prompt: "consent",
@@ -104,7 +108,7 @@ export async function connectOutlook(code: string) {
   const app = createApp(cacheBox);
   const result = await app.acquireTokenByCode({
     code,
-    scopes: GRAPH_SCOPES,
+    scopes: GRAPH_READ_SCOPES,
     redirectUri,
   });
   if (!cacheBox.value || !result.accessToken) {
@@ -116,6 +120,14 @@ export async function connectOutlook(code: string) {
 }
 
 export async function graphAccessToken() {
+  return accessToken(GRAPH_SCOPES, "Outlook session expired. Connect Outlook again.");
+}
+
+export async function graphReadAccessToken() {
+  return accessToken(GRAPH_READ_SCOPES, "Reconnect Outlook to check replies.");
+}
+
+async function accessToken(scopes: string[], expiredMessage: string) {
   const connection = await readConnection();
   if (!connection) throw new AppError("Outlook not connected", 409, "outlook_not_connected");
 
@@ -124,7 +136,7 @@ export async function graphAccessToken() {
     cache = decryptSecret(connection.encrypted_cache);
   } catch (error) {
     if (error instanceof AppError) throw error;
-    throw new AppError("Outlook session expired. Connect Outlook again.", 401, "oauth_expired");
+    throw new AppError(expiredMessage, 401, "oauth_expired");
   }
 
   const cacheBox = { value: cache };
@@ -133,14 +145,14 @@ export async function graphAccessToken() {
     const accounts = await app.getTokenCache().getAllAccounts();
     const account = accounts[0];
     if (!account) {
-      throw new AppError("Outlook session expired. Connect Outlook again.", 401, "oauth_expired");
+      throw new AppError(expiredMessage, 401, "oauth_expired");
     }
     const result = await app.acquireTokenSilent({
       account,
-      scopes: GRAPH_SCOPES,
+      scopes,
     });
     if (!result?.accessToken) {
-      throw new AppError("Outlook session expired. Connect Outlook again.", 401, "oauth_expired");
+      throw new AppError(expiredMessage, 401, "oauth_expired");
     }
     if (cacheBox.value !== cache) {
       await writeConnection(result.account?.username ?? connection.account_email, cacheBox.value);
@@ -148,9 +160,6 @@ export async function graphAccessToken() {
     return result.accessToken;
   } catch (error) {
     if (error instanceof AppError) throw error;
-    if (error instanceof InteractionRequiredAuthError) {
-      throw new AppError("Outlook session expired. Connect Outlook again.", 401, "oauth_expired");
-    }
-    throw new AppError("Outlook session expired. Connect Outlook again.", 401, "oauth_expired");
+    throw new AppError(expiredMessage, 401, "oauth_expired");
   }
 }

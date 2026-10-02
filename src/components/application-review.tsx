@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ApplicationRecord } from "@/lib/applications/repository";
 import { formatDateTime } from "@/lib/format";
+import { CheckRepliesButton } from "@/components/check-replies-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,7 @@ export function ApplicationReview({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(application.status === "failed" ? application.errorMessage ?? "" : "");
   const [warning, setWarning] = useState("");
+  const [translating, setTranslating] = useState("");
 
   const analysis = application.jobAnalysis;
   const emailReady = validEmail(recruiterEmail);
@@ -78,6 +80,24 @@ export function ApplicationReview({
     setter(value);
     setDirty(true);
     setConfirming(false);
+  }
+
+  async function translate(language: "pt" | "en") {
+    setTranslating(language);
+    setError("");
+    const response = await fetch(`/api/applications/${application.id}/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language }),
+    });
+    const payload = (await response.json().catch(() => null)) as { body?: string; error?: string } | null;
+    setTranslating("");
+    if (!response.ok || !payload?.body) {
+      setError(payload?.error ?? "The email could not be translated.");
+      return;
+    }
+    setBody(payload.body);
+    setDirty(false);
   }
 
   async function send() {
@@ -193,7 +213,31 @@ export function ApplicationReview({
           <Input id="subject" value={subject} readOnly={sent} onChange={(event) => edit(setSubject, event.target.value)} className="h-11 text-base" />
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor="email">Email</Label>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="email">Email</Label>
+            {sent ? null : (
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 px-3"
+                  disabled={Boolean(translating)}
+                  onClick={() => void translate("pt")}
+                >
+                  {translating === "pt" ? "…" : "PT"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 px-3"
+                  disabled={Boolean(translating)}
+                  onClick={() => void translate("en")}
+                >
+                  {translating === "en" ? "…" : "EN"}
+                </Button>
+              </div>
+            )}
+          </div>
           <Textarea
             id="email"
             value={body}
@@ -210,10 +254,27 @@ export function ApplicationReview({
       </div>
 
       {sent ? (
-        <p className="text-sm">
-          Sent {application.sentAt ? formatDateTime(application.sentAt) : ""}
-          {outlookEmail ? ` from ${outlookEmail}` : ""}.
-        </p>
+        <div className="grid gap-3">
+          <p className="text-sm">
+            <span className="mr-2 inline-flex rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
+              Sent
+            </span>
+            {application.sentAt ? formatDateTime(application.sentAt) : ""}
+            {outlookEmail ? ` from ${outlookEmail}` : ""}.
+          </p>
+          {application.replyFrom ? (
+            <div className="rounded-xl bg-card px-3 py-3 text-sm ring-1 ring-foreground/10">
+              <p className="font-medium">Replied · {application.replyFrom}</p>
+              {application.replyReceivedAt ? (
+                <p className="text-muted-foreground">{formatDateTime(application.replyReceivedAt)}</p>
+              ) : null}
+              {application.replyPreview ? <p className="mt-2 leading-6">{application.replyPreview}</p> : null}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No reply stored yet.</p>
+          )}
+          <CheckRepliesButton id={application.id} block />
+        </div>
       ) : (
         <div className="grid gap-3">
           {blocker ? (
